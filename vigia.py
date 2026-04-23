@@ -1,37 +1,49 @@
 import cv2
 import requests
-import socket
-import uuid
+import os
+import getpass
+from dotenv import load_dotenv
 
-API_URL = "http://127.0.0.1:8000"
+load_dotenv()   
 
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
-def obter_id_maquina():
-    nome_pc = socket.gethostname()
+face_Cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-    mac=uuid.getnode()
-    mac_string= ':'.join(("%012X" % mac)[i:i+2] for i in range(0, 12, 2))
+def fazer_login():
+    print("VERIFIQ OS - PORTAL DO FUNCIONÁRIO")
 
-    return f"{nome_pc}_{mac_string}"
+    email_digitado = input(" digite seu e-mail: ")
+    senha_digitada = getpass.getpass(" digite sua senha: ")
 
-def iniciar_vigia():
-    machine_id = obter_id_maquina()
-    print(f"impressão digital desta maquina: {machine_id}")
-    print(f"solicitando acesso na API: {API_URL}...")
+    print("Verificando credenciais...")
+
     try:
-        login_req = requests.post(f"{API_URL}/login-maquina", json={"machine_id": machine_id})
+        login_req = requests.post(f"{API_URL}/login", json={"email": email_digitado, "senha": senha_digitada})
+
         if login_req.status_code == 401:
-            print("Acesso negado. Máquina não autorizada.")
-            return False
+            print("Credenciais inválidas. Tente novamente.")
+            return None
+        
         login_req.raise_for_status()
 
         dados = login_req.json()
-        token = dados["token"]
-        headers = {"Authorization": f"Bearer {token}"}  
-        print(f"Acesso Liberado, Máquina reconhecida. Operador: {dados['usuario']}")
-        
-        requests.post(f"{API_URL}/camera/status", json={"status": "LIGADA"}, headers=headers)
+        print(f"Bem-vindo, {dados['usuario']}!")  
+
+        return dados["token"]
+    
+    except Exception as e:
+        print(f"Erro ao fazer login: {e}")
+        return None
+    
+def iniciar_vigia(token):
+
+    headers = {"Authorization": f"Bearer {token}"} 
+
+    print("Iniciando sistema de segurança...")
+
+    try:
+        requests.post(f"{API_URL}/cameras/status", json={"status": "LIGADA"}, headers=headers)
         cap = cv2.VideoCapture(0)
 
         while True:
@@ -39,24 +51,29 @@ def iniciar_vigia():
             if not ret: break
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) 
-            rostos = face_cascade.detectMultiScale(gray, 1.3, 5)
+            rostos = face_Cascade.detectMultiScale(gray, 1.3, 5)  
 
-            #detecção
-            status_txt = "monitorando..." if len(rostos) == 1 else "ALERTA!"
+            status_txt = "Ponto Ativo / Monitorando..." if len(rostos) == 1 else "ALERTA DE SEGURANCA!"
             cor = (0, 255, 0) if len(rostos) == 1 else (0, 0, 255)
+
             cv2.putText(frame, status_txt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, cor, 2)
-            cv2.imshow('VERIFIQ OS - Scanner', frame)
-            
-            if cv2.waitKey(1) & 0XFF == ord('q') : break
+            cv2.imshow('VERIFIQ OS - Scanner Ativo', frame)
+
+            if cv2.waitKey(1) & 0XFF == ord('q'): break
 
     except Exception as e:
-        print(f" falha na integração: {e}")
+        print(f"Erro ao iniciar vigia: {e}")
+        
     finally:
-        if 'headers' in locals():
-            requests.post(f"{API_URL}/camera/status", json={"status": "DESLIGADA"}, headers=headers)
+        print("Encerrando turno e desligando câmera...")
+        requests.post(f"{API_URL}/cameras/status", json={"status": "DESLIGADA"}, headers=headers)  
         if 'cap' in locals():
             cap.release()
         cv2.destroyAllWindows()
-    
+
 if __name__ == "__main__":
-    iniciar_vigia()
+    
+    token_recebido = fazer_login()
+    
+    if token_recebido:
+        iniciar_vigia(token_recebido)
