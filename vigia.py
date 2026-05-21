@@ -1,6 +1,7 @@
 import os
 import time
 from typing import Any, Dict, Optional
+import ctypes
 
 import cv2
 import numpy as np
@@ -32,6 +33,22 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _lock_workstation_windows() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return bool(ctypes.windll.user32.LockWorkStation())
+    except Exception:
+        return False
+
+
 
 
 
@@ -49,6 +66,8 @@ def iniciar_vigia() -> None:
     alert_cooldown_s = _float_env("ALERT_COOLDOWN_SEGUNDOS", 45.0)
     gallery_refresh_s = _float_env("GALERIA_REFRESH_SEGUNDOS", 120.0)
     process_stride = max(1, _int_env("FRAME_PROCESS_STRIDE", 1))
+    auto_lock_on_intruder = _bool_env("AUTO_LOCK_ON_INTRUSO", True)
+    lock_cooldown_s = _float_env("LOCK_COOLDOWN_SEGUNDOS", 120.0)
 
     print("Carregando modelo de reconhecimento (primeira execução pode baixar pesos)...")
     det_w = max(320, min(640, _int_env("FACE_DET_SIZE", 640)))
@@ -74,7 +93,23 @@ def iniciar_vigia() -> None:
     streak_unknown = 0
     streak_multi = 0
     ultimo_alerta_mono = 0.0
+    ultimo_bloqueio_mono = 0.0
     last_faces: list = []
+
+    def tentar_bloquear_tela(motivo: str) -> None:
+        nonlocal ultimo_bloqueio_mono
+        if not auto_lock_on_intruder:
+            return
+
+        agora = time.monotonic()
+        if agora - ultimo_bloqueio_mono < lock_cooldown_s:
+            return
+
+        if _lock_workstation_windows():
+            ultimo_bloqueio_mono = agora
+            print(f"[SEGURANCA] Tela bloqueada pelo motivo: {motivo}")
+        else:
+            print("[SEGURANCA] Falha ao bloquear a tela (somente Windows com sessão interativa).")
 
     try:
         while True:
@@ -143,6 +178,7 @@ def iniciar_vigia() -> None:
                             pass
                     except Exception as e:
                         print('Erro ao enviar alerta:', e)
+                    tentar_bloquear_tela("multiplas_pessoas")
                     ultimo_alerta_mono = now
                     streak_multi = 0
 
@@ -196,6 +232,7 @@ def iniciar_vigia() -> None:
                                     pass
                             except Exception as e:
                                 print('Erro ao enviar alerta:', e)
+                            tentar_bloquear_tela("rosto_desconhecido")
                             ultimo_alerta_mono = now
                             streak_unknown = 0
 

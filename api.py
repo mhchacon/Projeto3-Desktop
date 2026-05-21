@@ -10,14 +10,70 @@ load_dotenv()
 
 API_URL = os.getenv("API_URL", "https://projeto3-api.onrender.com").rstrip("/")
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+API_LOGIN_EMAIL = os.getenv("API_LOGIN_EMAIL", "").strip()
+API_LOGIN_PASSWORD = os.getenv("API_LOGIN_PASSWORD", "").strip()
 REQUEST_TIMEOUT = float(os.getenv("API_TIMEOUT", "20"))
 
 
 def _headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if API_TOKEN:
-        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    token = _ensure_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def _login_token() -> str:
+    if not API_LOGIN_EMAIL or not API_LOGIN_PASSWORD:
+        return ""
+
+    try:
+        response = requests.post(
+            f"{API_URL}/login",
+            json={"email": API_LOGIN_EMAIL, "senha": API_LOGIN_PASSWORD},
+            timeout=REQUEST_TIMEOUT,
+        )
+        payload = _json_or_error(response)
+        if response.ok and isinstance(payload, dict):
+            return str(payload.get("token") or "").strip()
+    except Exception:
+        return ""
+
+    return ""
+
+
+def _ensure_token(force_refresh: bool = False) -> str:
+    global API_TOKEN
+
+    if API_TOKEN and not force_refresh:
+        return API_TOKEN
+
+    refreshed = _login_token()
+    if refreshed:
+        API_TOKEN = refreshed
+    return API_TOKEN
+
+
+def _request(method: str, path: str, *, json: Optional[dict] = None) -> requests.Response:
+    response = requests.request(
+        method,
+        f"{API_URL}{path}",
+        json=json,
+        headers=_headers(),
+        timeout=REQUEST_TIMEOUT,
+    )
+
+    if response.status_code == 401 and API_LOGIN_EMAIL and API_LOGIN_PASSWORD:
+        _ensure_token(force_refresh=True)
+        response = requests.request(
+            method,
+            f"{API_URL}{path}",
+            json=json,
+            headers=_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+
+    return response
 
 
 def _json_or_error(response: requests.Response) -> Dict[str, Any]:
@@ -37,15 +93,8 @@ def _json_or_error(response: requests.Response) -> Dict[str, Any]:
 
 
 def fetch_galeria_faces() -> List[dict]:
-    if not API_TOKEN:
-        return []
-
     try:
-        response = requests.get(
-            f"{API_URL}/faces/galeria",
-            headers=_headers(),
-            timeout=REQUEST_TIMEOUT,
-        )
+        response = _request("GET", "/faces/galeria")
         payload = _json_or_error(response)
         return payload.get("galeria", []) if isinstance(payload, dict) else []
     except Exception as error:
@@ -70,12 +119,7 @@ def post_alert(
         payload["usuario_id_reconhecido"] = detalhes.get("usuario_id_reconhecido")
 
     try:
-        response = requests.post(
-            f"{API_URL}/seguranca/alerta",
-            json=payload,
-            headers=_headers(),
-            timeout=REQUEST_TIMEOUT,
-        )
+        response = _request("POST", "/seguranca/alerta", json=payload)
         return _json_or_error(response)
     except Exception as error:
         return {"error": str(error)}
@@ -94,12 +138,7 @@ def post_ponto(
     }
 
     try:
-        response = requests.post(
-            f"{API_URL}/ponto",
-            json=payload,
-            headers=_headers(),
-            timeout=REQUEST_TIMEOUT,
-        )
+        response = _request("POST", "/ponto", json=payload)
         return _json_or_error(response)
     except Exception as error:
         return {"error": str(error)}
